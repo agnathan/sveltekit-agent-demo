@@ -42,28 +42,14 @@ export class VertexVisionAnswerService {
 			imageUrlCount: imageUrls.length,
 			contextCount: pageContexts.length
 		});
-		const runId = `answer-${Date.now()}`;
-
 		const vertex = createVertex({ project: this.projectId, location: this.location });
 		const fetchedImages: Array<{ url: string; buffer: ArrayBuffer }> = [];
-		const imageFetchStarted = Date.now();
 		for (const url of imageUrls) {
 			this.logger.info('Fetching image for vision', { url });
 			const res = await fetch(url);
 			if (!res.ok) continue;
 			fetchedImages.push({ url, buffer: await res.arrayBuffer() });
 		}
-		this.logger.debug?.({
-			runId,
-			hypothesisId: 'H2',
-			location: 'agent-tools:VertexVisionAnswerService.answer',
-			message: 'Completed image fetch stage',
-			data: {
-				requestedImageUrls: imageUrls.length,
-				fetchedImages: fetchedImages.length,
-				elapsedMs: Date.now() - imageFetchStarted
-			}
-		});
 
 		if (fetchedImages.length === 0) {
 			this.logger.info('No images fetched successfully');
@@ -102,7 +88,6 @@ export class VertexVisionAnswerService {
 		const textItemsContext =
 			allTextItems.length > 0 ? `\n\nAvailable text items on the page:\n${textItemsList}` : '';
 
-		const modelStarted = Date.now();
 		const { text } = await generateText({
 			model: vertex(this.model),
 			messages: [
@@ -131,17 +116,6 @@ export class VertexVisionAnswerService {
 					]
 				}
 			]
-		});
-		this.logger.debug?.({
-			runId,
-			hypothesisId: 'H3',
-			location: 'agent-tools:VertexVisionAnswerService.answer',
-			message: 'Completed generateText stage',
-			data: {
-				elapsedMs: Date.now() - modelStarted,
-				contextChars: contextText.length + textItemsContext.length,
-				questionChars: question.length
-			}
 		});
 
 		const { answer, relevantTexts } = this.answerParser.parseStructuredAnswer(text);

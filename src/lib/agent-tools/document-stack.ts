@@ -62,25 +62,9 @@ export class DocumentRetrievalAndVisionStack {
 		return this.pineconeService!.query(query, k);
 	}
 
-	async answerFromImages(
-		question: string,
-		trace?: { runId: string }
-	): Promise<VisionAnswerResult> {
+	async answerFromImages(question: string): Promise<VisionAnswerResult> {
 		this.ensureServices();
-		const runId = trace?.runId ?? `answer-stack-${Date.now()}`;
-		const retrievalStarted = Date.now();
 		const fullResult = await this.pineconeService!.query(question, this.config.topK);
-		this.logger.debug?.({
-			runId,
-			hypothesisId: 'H1',
-			location: 'agent-tools:DocumentRetrievalAndVisionStack.answerFromImages',
-			message: 'Retrieval finished before vision',
-			data: {
-				retrievalElapsedMs: Date.now() - retrievalStarted,
-				retrievedImageUrls: fullResult.imageUrls.length,
-				retrievedPageContexts: fullResult.pageContexts.length
-			}
-		});
 		return this.visionService!.answer(question, fullResult.imageUrls, fullResult.pageContexts);
 	}
 

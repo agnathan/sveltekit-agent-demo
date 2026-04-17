@@ -6,8 +6,7 @@ import { env } from '$env/dynamic/private';
 import {
 	createVercelAiAgentTools,
 	ConsoleAgentToolsLogger,
-	normalizeGoogleVertexLocation,
-	RemoteDebugAgentToolsLogger
+	normalizeGoogleVertexLocation
 } from './agent-tools/index.js';
 import type { AgentToolsConfig } from './agent-tools/types.js';
 
@@ -15,9 +14,6 @@ const DEFAULT_PINECONE_INDEX = 'pdf-image-upsert';
 const DEFAULT_PINECONE_NAMESPACE = 'AAA_UPSERT_TEST';
 const DEFAULT_TOP_K = 3;
 const DEFAULT_VISION_MODEL = 'gemini-2.5-flash';
-
-const DEBUG_INGEST_URL = 'http://127.0.0.1:7719/ingest/28e9ccf7-9636-4b69-be79-2ec6ddab30c2';
-const DEBUG_SESSION_ID = '9b4c8a';
 
 function buildConfig(): AgentToolsConfig {
 	const topKRaw = env.PINECONE_TOP_K;
@@ -44,8 +40,7 @@ function buildConfig(): AgentToolsConfig {
 const config = buildConfig();
 
 const feedbackEnabled = config.feedbackEnabled !== false;
-const baseLogger = new ConsoleAgentToolsLogger({ feedbackEnabled });
-const logger = new RemoteDebugAgentToolsLogger(baseLogger, DEBUG_INGEST_URL, DEBUG_SESSION_ID);
+const logger = new ConsoleAgentToolsLogger({ feedbackEnabled });
 
 const vercelTools = createVercelAiAgentTools(config, logger);
 

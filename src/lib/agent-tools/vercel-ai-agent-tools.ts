@@ -36,27 +36,12 @@ export class VercelAiAgentTools {
 			}),
 			execute: async ({ query }) => {
 				const started = Date.now();
-				const runId = `pinecone-${Date.now()}`;
 				const topK = this.stack.topK;
 				this.logger.info('Tool start: pineconeQuery', { query, topK });
 				const result = await this.stack.queryPinecone(query, topK);
-				const resultJsonLength = JSON.stringify(result).length;
 				if (this.stack.verboseRetrievalLogging) {
 					console.error('[pineconeQuery full result]', JSON.stringify(result, null, 2));
 				}
-				this.logger.debug?.({
-					runId,
-					hypothesisId: 'H7',
-					location: 'agent-tools:VercelAiAgentTools.pineconeQueryTool',
-					message: 'Pinecone query completed',
-					data: {
-						elapsedMs: Date.now() - started,
-						topK,
-						imageUrls: result.imageUrls.length,
-						pageContexts: result.pageContexts.length,
-						resultJsonLength
-					}
-				});
 				this.logger.info('Tool end: pineconeQuery', {
 					elapsedMs: Date.now() - started,
 					matches: result.matches.length,
@@ -74,23 +59,11 @@ export class VercelAiAgentTools {
 			}),
 			execute: async ({ question }) => {
 				const started = Date.now();
-				const runId = `answer-tool-${Date.now()}`;
 				try {
 					this.logger.info('Tool start: answerFromImages', {
 						questionChars: question.length
 					});
-					const result = await this.stack.answerFromImages(question, { runId });
-					this.logger.debug?.({
-						runId,
-						hypothesisId: 'H1',
-						location: 'agent-tools:VercelAiAgentTools.answerFromImagesTool',
-						message: 'answerFromImages completed',
-						data: {
-							elapsedMs: Date.now() - started,
-							usedImageUrls: result.usedImageUrls.length,
-							highlightBoxes: result.highlightBoxes.length
-						}
-					});
+					const result = await this.stack.answerFromImages(question);
 					this.logger.info('Tool end: answerFromImages', {
 						elapsedMs: Date.now() - started,
 						usedImageUrls: result.usedImageUrls.length,
@@ -100,16 +73,6 @@ export class VercelAiAgentTools {
 				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);
 					this.logger.info('Tool error: answerFromImages', { message, elapsedMs: Date.now() - started });
-					this.logger.debug?.({
-						runId,
-						hypothesisId: 'H1',
-						location: 'agent-tools:VercelAiAgentTools.answerFromImagesTool',
-						message: 'answerFromImages failed',
-						data: {
-							error: message,
-							elapsedMs: Date.now() - started
-						}
-					});
 					return {
 						error: message,
 						answer: '',

@@ -1,6 +1,6 @@
 export type { AgentToolsConfig, BoundingBox, HighlightBox, PineconeMatch, PineconeQueryResult, TextItem } from './types.js';
-export type { AgentToolsDebugPayload, AgentToolsLogger } from './logger.js';
-export { ConsoleAgentToolsLogger, RemoteDebugAgentToolsLogger } from './logger.js';
+export type { AgentToolsLogger } from './logger.js';
+export { ConsoleAgentToolsLogger } from './logger.js';
 export { normalizeGoogleVertexLocation, GoogleCredentialsEnvNormalizer } from './google-credentials.js';
 export {
 	DocumentMetadataParser,
