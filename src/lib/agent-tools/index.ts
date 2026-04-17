@@ -1,0 +1,18 @@
+export type { AgentToolsConfig, BoundingBox, HighlightBox, PineconeMatch, PineconeQueryResult, TextItem } from './types.js';
+export type { AgentToolsDebugPayload, AgentToolsLogger } from './logger.js';
+export { ConsoleAgentToolsLogger, RemoteDebugAgentToolsLogger } from './logger.js';
+export { normalizeGoogleVertexLocation, GoogleCredentialsEnvNormalizer } from './google-credentials.js';
+export {
+	DocumentMetadataParser,
+	RelevantTextHighlighter,
+	StructuredVisionAnswerParser
+} from './parsers.js';
+export { VertexMultimodalTextEmbedder } from './vertex-multimodal-embedder.js';
+export { PineconeImageQueryService } from './pinecone-image-query.js';
+export type { VisionAnswerResult, VisionPageContext } from './vertex-vision-answer.js';
+export { VertexVisionAnswerService } from './vertex-vision-answer.js';
+export {
+	DocumentRetrievalAndVisionStack,
+	assertAgentToolsConfig
+} from './document-stack.js';
+export { VercelAiAgentTools, createVercelAiAgentTools } from './vercel-ai-agent-tools.js';
