@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# SvelteKit / Vite
+.svelte-kit/
+build/
+dist/
+.output/
+.vite/
+
+# Deploy / edge previews (if you add adapters later)
+.vercel/
+.netlify/
+.wrangler/
+
+# Vite dependency pre-bundling cache timestamps
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Google Cloud / Vertex local credentials (never commit keys)
+service-account.json
+*-service-account*.json
+*.pem
+
+# Logs and debug
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor / local tooling (untracked machine-specific)
+.cursor/
+
+# Test / coverage (if you add Vitest later)
+coverage/
