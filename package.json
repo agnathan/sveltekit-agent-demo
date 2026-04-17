@@ -6,7 +6,9 @@
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build",
-		"preview": "vite preview"
+		"preview": "vite preview",
+		"test": "vitest run",
+		"test:watch": "vitest"
 	},
 	"dependencies": {
 		"@ai-sdk/google-vertex": "^4.0.109",
@@ -24,6 +26,7 @@
 		"@sveltejs/vite-plugin-svelte": "^5.0.0",
 		"svelte": "^5.0.0",
 		"typescript": "^5.7.0",
-		"vite": "^6.0.0"
+		"vite": "^6.0.0",
+		"vitest": "^3.2.0"
 	}
 }

@@ -687,6 +687,8 @@
 		display: flex;
 		flex-direction: column;
 		min-height: 100vh;
+		min-height: 100dvh;
+		box-sizing: border-box;
 	}
 
 	header {
@@ -751,13 +753,17 @@
 		border-color: var(--border-hover);
 	}
 
-	/* Messages */
+	/* Messages: own scrollport so long threads (tables, PDF previews) never sit under the composer */
 	.messages {
 		flex: 1;
+		min-height: 0;
+		overflow-y: auto;
+		overscroll-behavior-y: contain;
 		display: flex;
 		flex-direction: column;
 		gap: 1rem;
-		margin-bottom: 1rem;
+		margin-bottom: 0.75rem;
+		padding-bottom: 0.5rem;
 	}
 	.message {
 		padding: 0.75rem 1rem;
@@ -1213,14 +1219,14 @@
 		50% { opacity: 0.4; }
 	}
 
-	/* Input form */
+	/* Input form — in document flow below the scrollable thread (no overlap) */
 	form {
 		display: flex;
 		gap: 0.5rem;
-		position: sticky;
-		bottom: 1rem;
+		flex-shrink: 0;
 		background: var(--bg);
 		padding-top: 0.5rem;
+		padding-bottom: max(0.25rem, env(safe-area-inset-bottom, 0px));
 	}
 	form input {
 		flex: 1;
