@@ -15,4 +15,5 @@ export {
 	DocumentRetrievalAndVisionStack,
 	assertAgentToolsConfig
 } from './document-stack.js';
-export { VercelAiAgentTools, createVercelAiAgentTools } from './vercel-ai-agent-tools.js';
+export type { AgentToolContext } from './tool-context.js';
+export { createAllAgentTools, createChatAgentTools } from './chat-tool-set.js';

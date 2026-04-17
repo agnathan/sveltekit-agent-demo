@@ -4,7 +4,7 @@ This document describes how the **sveltekit-agent-demo** application implements 
 
 **Authentication is not covered.** This repository does not implement login, sessions, or API protection for `/api/chat`. If you port the design, add your own auth at the edge or in SvelteKit hooks as needed.
 
-**Demo UI caveat:** Example prompt chips in [src/routes/+page.svelte](src/routes/+page.svelte) mention weather queries, but the registered agent tools in [src/lib/agent.ts](src/lib/agent.ts) are only `answerFromImages`, `calculator`, and `unitConverter`. There is no weather tool; those examples will not invoke a weather API.
+**Demo UI caveat:** Example prompt chips in [src/routes/+page.svelte](src/routes/+page.svelte) mention weather queries, but there is **no weather API** tool. For place-style questions, enable **“Use Google Maps grounding for this message”** (or JSON **`useMapsForMessage`: `true`**) so the server runs **only** the Vertex **`googleMaps`** tool that turn—Vertex does not allow mixing it with function tools in one request. Optionally pass **`mapsLatLng`** / **`retrievalLatLng`** for `retrievalConfig.latLng`.
 
 ---
 
@@ -24,7 +24,7 @@ This document describes how the **sveltekit-agent-demo** application implements 
 12. [Client: how agent thinking is shown](#12-client-how-agent-thinking-is-shown)
 13. [Client: message parts, tools, sources, highlights](#13-client-message-parts-tools-sources-highlights)
 14. [Markdown rendering](#14-markdown-rendering)
-15. [Observability and debug logging](#15-observability-and-debug-logging)
+15. [Observability and logging](#15-observability-and-logging)
 16. [Reproduction checklist](#16-reproduction-checklist)
 17. [Appendix: TypeScript classes, types, and interfaces](#appendix-typescript-classes-types-and-interfaces)
 
@@ -68,12 +68,12 @@ flowchart LR
   UIStream -->|"streamed UIMessage parts"| Chat
 ```
 
-**Request body:** JSON with `messages` as an array of `UIMessage` objects (same shape the AI SDK expects on the client).
+**Request body:** JSON with `messages` as an array of `UIMessage` objects (same shape the AI SDK expects on the client). Optional **`useMapsForMessage`**: when `true`, `streamText` uses **`agentMapsTools`** (`googleMaps` only) and **`agentSystemMapsOnly`**; otherwise **`agentChatTools`** and **`agentSystemChat`**. Optionally include **`mapsLatLng`** or **`retrievalLatLng`** as `{ "latitude": number, "longitude": number }`; when valid, the handler passes `providerOptions: { vertex: { retrievalConfig: { latLng } } }` into `streamText`.
 
 **Key server files:**
 
 - [src/routes/api/chat/+server.ts](src/routes/api/chat/+server.ts) — HTTP handler, `streamText`, stream response.
-- [src/lib/agent.ts](src/lib/agent.ts) — model instance, system prompt, `agentTools` object.
+- [src/lib/agent.ts](src/lib/agent.ts) — model instance, `agentSystemChat` / `agentSystemMapsOnly`, `agentChatTools`, `agentMapsTools`, `agentToolsForHistory`.
 - [src/lib/tools.ts](src/lib/tools.ts) — builds `AgentToolsConfig` from env, logger, exports tool instances for `agent.ts` (re-exports from agent-tools).
 
 ---
@@ -102,7 +102,7 @@ Pinned intent from [package.json](package.json) (exact versions may drift with l
 
 | Variable | Used in | Purpose |
 |----------|---------|---------|
-| `GOOGLE_PROJECT_ID` | [src/lib/agent.ts](src/lib/agent.ts), [src/lib/tools.ts](src/lib/tools.ts) | Vertex project; throws at module load if missing in agent |
+| `GOOGLE_PROJECT_ID` or `GOOGLE_VERTEX_PROJECT` | [src/lib/agent.ts](src/lib/agent.ts), [src/lib/tools.ts](src/lib/tools.ts) | GCP project for Vertex; agent throws if both are missing |
 | `PINECONE_API_KEY` | [src/lib/tools.ts](src/lib/tools.ts) → `AgentToolsConfig` | Pinecone API key; validated in `assertAgentToolsConfig` |
 | `GOOGLE_APPLICATION_CREDENTIALS` | [src/lib/agent-tools/google-credentials.ts](src/lib/agent-tools/google-credentials.ts) | Service account JSON path for Vertex and aiplatform client |
 
@@ -112,7 +112,7 @@ Relative `GOOGLE_APPLICATION_CREDENTIALS` paths are resolved once against `crede
 
 | Variable | Default / behavior |
 |----------|-------------------|
-| `GOOGLE_LOCATION` or `GOOGLE_LOCATION_REGION` | Empty or `global` → normalized to `us-central1` (see [src/lib/agent.ts](src/lib/agent.ts) and `normalizeGoogleVertexLocation` in [src/lib/agent-tools/google-credentials.ts](src/lib/agent-tools/google-credentials.ts)) |
+| `GOOGLE_LOCATION`, `GOOGLE_LOCATION_REGION`, or `GOOGLE_VERTEX_LOCATION` | Empty or `global` → normalized to `us-central1` (see [src/lib/agent.ts](src/lib/agent.ts) and `normalizeGoogleVertexLocation` in [src/lib/agent-tools/google-credentials.ts](src/lib/agent-tools/google-credentials.ts)) |
 | `PINECONE_INDEX_NAME` or `PINECONE_INDEX` | `pdf-image-upsert` |
 | `PINECONE_NAMESPACE` | `AAA_UPSERT_TEST` |
 | `PINECONE_TOP_K` | `3` (must be finite and &gt; 0) |
@@ -142,7 +142,7 @@ Relative `GOOGLE_APPLICATION_CREDENTIALS` paths are resolved once against `crede
 
 ```ts
 const modelMessages = await convertToModelMessages(messages, {
-  tools: agentTools,
+  tools: agentToolsForHistory,
   ignoreIncompleteToolCalls: true
 });
 ```
@@ -152,28 +152,30 @@ const modelMessages = await convertToModelMessages(messages, {
 ### Streaming generation
 
 ```ts
+const streamTools = useMapsForMessage ? agentMapsTools : agentChatTools;
+const system = useMapsForMessage ? agentSystemMapsOnly : agentSystemChat;
+
 const result = streamText({
   model: agentModel,
-  system: agentSystem,
+  system,
   messages: modelMessages,
-  tools: agentTools,
+  tools: streamTools,
+  ...(providerOptions ? { providerOptions } : {}),
   stopWhen: stepCountIs(8),
-  abortSignal: abortController.signal,
-  onStepFinish: …,
-  onFinish: …
+  abortSignal: abortController.signal
 });
 ```
 
+- **`agentToolsForHistory`** includes both chat tools and `googleMaps` so prior turns convert correctly; **`streamTools`** is only one kind per request for Vertex.
+- **`providerOptions`** is set when the client sends a valid `mapsLatLng` / `retrievalLatLng` object (see request body above).
 - **`stopWhen: stepCountIs(8)`** caps multi-step tool loops at eight steps.
-- **`onStepFinish` / `onFinish`** only feed a local `debugLog` helper (see [Observability](#15-observability-and-debug-logging)).
 
 ### Response format
 
 ```ts
 return result.toUIMessageStreamResponse({
   originalMessages: messages,
-  sendReasoning: true,
-  onFinish: …
+  sendReasoning: true
 });
 ```
 
@@ -188,30 +190,24 @@ return result.toUIMessageStreamResponse({
 
 ### Model
 
-- `createVertex({ project: GOOGLE_PROJECT_ID, location: LOCATION })` then `vertex(MODEL)`.
+- `createVertex({ project: VERTEX_PROJECT, location: LOCATION })` then `vertex(MODEL)`.
 - `MODEL = process.env.AGENT_MODEL?.trim() || 'gemini-2.5-flash'`.
-- `GOOGLE_PROJECT_ID` comes from `$env/static/private` and is **required** at import time.
+- `VERTEX_PROJECT` is `(GOOGLE_PROJECT_ID || GOOGLE_VERTEX_PROJECT)?.trim()` from `$env/dynamic/private`; **one of them is required** at runtime when the module loads.
 
 ### System prompt (behavioral contract)
 
 The system string instructs the model to:
 
 - Use **`answerFromImages`** for document Q&A and **not** call retrieval tools separately for that case.
-- Use calculator / unit tools when needed.
-- Explain tool results in natural language and include a short **sources** list with page numbers, image URLs, and bounding boxes when using document tools.
+- **Default turn (`agentSystemChat`):** document Q&A via **`answerFromImages`**, plus calculator / unit tools — no `googleMaps` in the tool list.
+- **Maps-only turn (`agentSystemMapsOnly`):** when the client sets **`useMapsForMessage`**, only **`googleMaps`** is available; the model is told not to claim document access for that turn.
 - Before tools or final answers, emit step-by-step reasoning inside **`<thinking>...</thinking>`** tags for the UI to extract (concise).
 
 ### Tools exposed to `streamText`
 
-```ts
-export const agentTools = {
-  answerFromImages: answerFromImagesTool,
-  calculator: calculatorTool,
-  unitConverter: unitConverterTool
-} satisfies ToolSet;
-```
+[src/lib/agent.ts](src/lib/agent.ts) exports **`agentChatTools`** (`chatTools` from [src/lib/tools.ts](src/lib/tools.ts) / `createChatAgentTools`) and **`agentMapsTools`** (`{ googleMaps }` from `createVertex(...).tools.googleMaps({})`). The API route picks one set per request from **`useMapsForMessage`**. **`agentToolsForHistory`** merges both for `convertToModelMessages` only.
 
-**Not registered on the chat agent:** `pineconeQueryTool` is still constructed inside [src/lib/agent-tools/vercel-ai-agent-tools.ts](src/lib/agent-tools/vercel-ai-agent-tools.ts) and exported from [src/lib/tools.ts](src/lib/tools.ts), but **it is not included in `agentTools`**. Document retrieval runs **inside** `answerFromImages` so the planner does not need to chain `pineconeQuery` → `vision` manually and so large retrieval payloads stay out of the main tool loop (the tool description states this explicitly).
+**Not registered on the chat agent:** `pineconeQuery` is still built in [src/lib/agent-tools/tools/document-tools.ts](src/lib/agent-tools/tools/document-tools.ts) and exported from [src/lib/tools.ts](src/lib/tools.ts) as `pineconeQueryTool`, but **it is not included in `agentChatTools`**. Document retrieval runs **inside** `answerFromImages` so the planner does not need to chain `pineconeQuery` → `vision` manually and so large retrieval payloads stay out of the main tool loop (the tool description states this explicitly).
 
 ---
 
@@ -219,10 +215,11 @@ export const agentTools = {
 
 **File:** [src/lib/tools.ts](src/lib/tools.ts)
 
-- Reads **`$env/dynamic/private`** into an `AgentToolsConfig` object (see [src/lib/agent-tools/types.ts](src/lib/agent-tools/types.ts)).
-- Instantiates `ConsoleAgentToolsLogger` wrapped in `RemoteDebugAgentToolsLogger` (optional remote debug).
-- Calls `createVercelAiAgentTools(config, logger)` which builds `DocumentRetrievalAndVisionStack` + `VercelAiAgentTools`.
-- Re-exports `answerFromImagesTool`, `calculatorTool`, `unitConverterTool`, and `pineconeQueryTool` for potential use elsewhere; only the first three are wired into [src/lib/agent.ts](src/lib/agent.ts).
+- Reads **`$env/dynamic/private`** into an `AgentToolsConfig` object (see [src/lib/agent-tools/types.ts](src/lib/agent-tools/types.ts)), including `googleProjectId` from `GOOGLE_PROJECT_ID` or `GOOGLE_VERTEX_PROJECT`.
+- Resolves relative `GOOGLE_APPLICATION_CREDENTIALS` once at load (same as stack) before document tools run.
+- Instantiates `ConsoleAgentToolsLogger`, `DocumentRetrievalAndVisionStack`, and an `AgentToolContext` `{ stack, logger }`.
+- Composes tools via `createAllAgentTools` / `createChatAgentTools` from [src/lib/agent-tools/chat-tool-set.ts](src/lib/agent-tools/chat-tool-set.ts).
+- Re-exports individual tools (`pineconeQueryTool`, `answerFromImagesTool`, `calculatorTool`, `unitConverterTool`) and `chatTools` for [src/lib/agent.ts](src/lib/agent.ts) (which wraps `googleMaps` in **`agentMapsTools`** and does not merge it into **`agentChatTools`**).
 
 ---
 
@@ -303,7 +300,7 @@ For each match `m`:
 
 ### Standalone Pinecone tool (optional / not on chat agent)
 
-`pineconeQueryTool` runs the same `stack.queryPinecone` and returns the full `PineconeQueryResult` JSON to the model. It is **not** registered in `agentTools` for the main chat.
+`pineconeQueryTool` runs the same `stack.queryPinecone` and returns the full `PineconeQueryResult` JSON to the model. It is **not** registered in `agentChatTools` for the main chat.
 
 ---
 
@@ -376,14 +373,14 @@ y={page.pageHeight - box.y - box.h}
 
 ## 10. AI agent tools (Vercel AI SDK)
 
-**File:** [src/lib/agent-tools/vercel-ai-agent-tools.ts](src/lib/agent-tools/vercel-ai-agent-tools.ts)
+**Modules:** [src/lib/agent-tools/tools/document-tools.ts](src/lib/agent-tools/tools/document-tools.ts), [src/lib/agent-tools/tools/utility-tools.ts](src/lib/agent-tools/tools/utility-tools.ts); composed in [src/lib/agent-tools/chat-tool-set.ts](src/lib/agent-tools/chat-tool-set.ts). **`googleMaps`** is registered in [src/lib/agent.ts](src/lib/agent.ts) as **`agentMapsTools`**; the chat route selects **`agentChatTools`** vs **`agentMapsTools`** per request.
 
-Tools are created with `tool({ description, inputSchema: z.object(...), execute })` from the `ai` package.
+Most tools use `tool({ description, inputSchema: z.object(...), execute })` from the `ai` package. **`googleMaps`** is a **provider tool** (empty input schema); execution is handled by Vertex alongside the model.
 
 ### `answerFromImages`
 
 - **Input:** `{ question: string }`.
-- **Behavior:** Calls `stack.answerFromImages(question, { runId })` — Pinecone retrieval + vision pipeline.
+- **Behavior:** Calls `stack.answerFromImages(question)` — Pinecone retrieval + vision pipeline.
 - **Success return:** `VisionAnswerResult` — `answer`, `usedImageUrls`, `highlightBoxes`, `sources`.
 - **Error return:** Catches exceptions and returns `{ error: message, answer: '', usedImageUrls: [], highlightBoxes: [], sources: [] }` so the stream stays structured.
 
@@ -402,6 +399,13 @@ Tools are created with `tool({ description, inputSchema: z.object(...), execute 
 
 - **Input:** `{ value: number, from: enum, to: enum }` with units `miles`, `km`, `lbs`, `kg`, `fahrenheit`, `celsius`.
 - Returns `{ original, converted }` or `{ error }` for invalid pairs.
+
+### `googleMaps` (Vertex provider tool)
+
+- **Registration:** `vertex.tools.googleMaps({})` in [src/lib/agent.ts](src/lib/agent.ts) as **`agentMapsTools`**, used when **`useMapsForMessage`** is true on `POST /api/chat`.
+- **Behavior:** Maps grounding is performed by **Vertex** (not a local HTTP client to Places). See Google Cloud: [Grounding with Google Maps](https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/grounding-with-google-maps).
+- **Optional location hint:** When the client sends `mapsLatLng` / `retrievalLatLng` on `POST /api/chat`, the route adds `providerOptions.vertex.retrievalConfig.latLng` to `streamText`, matching the Vercel AI SDK + Vertex pattern.
+- **Grounding metadata:** Consumers can read `providerMetadata.vertex.groundingMetadata` on full `generateText` results; the streaming chat path surfaces tool and text parts via the UI message stream.
 
 ---
 
@@ -503,17 +507,11 @@ After tool parts, for assistant messages, `{#each answerData.highlightPages}` re
 
 ---
 
-## 15. Observability and debug logging
+## 15. Observability and logging
 
-### API route `debugLog`
-
-[src/routes/api/chat/+server.ts](src/routes/api/chat/+server.ts) POSTs JSON to a hard-coded local URL (`http://127.0.0.1:7719/ingest/...`) inside `fetch(...).catch(() => {})` so failures are silent. This is **development telemetry**, not required for reproduction.
-
-### `RemoteDebugAgentToolsLogger`
-
-[src/lib/agent-tools/logger.ts](src/lib/agent-tools/logger.ts) wraps `ConsoleAgentToolsLogger` and mirrors `debug` payloads to the same style of ingest endpoint, configured in [src/lib/tools.ts](src/lib/tools.ts).
-
-Production ports should remove or gate these behind env flags.
+- **Tool feedback:** [src/lib/agent-tools/logger.ts](src/lib/agent-tools/logger.ts) `ConsoleAgentToolsLogger` writes `info` lines to stderr when `AGENT_FEEDBACK` is not `false`.
+- **Verbose retrieval:** `AGENT_VERBOSE_RETRIEVAL=true` logs full Pinecone JSON from `pineconeQuery` / retrieval paths.
+- **Chat route:** [src/routes/api/chat/+server.ts](src/routes/api/chat/+server.ts) has no separate debug ingest; add your own tracing if needed.
 
 ---
 
@@ -525,6 +523,7 @@ Production ports should remove or gate these behind env flags.
 - [ ] **Metadata:** Each hit includes `imageUrl` reachable from the **server** (`fetch` in vision service — no browser CORS). Include `pageText` or `textPreview` if you need `pageContexts` populated.
 - [ ] **Highlights:** Store `textItems` with `text` + `boundingBox` and ensure the vision step can copy exact snippets into `relevantTexts`.
 - [ ] **PDF dimensions:** If your rasterized page images are not 792×612 PDF points, pass or store `pageWidth` / `pageHeight` in tool output and extend the client to read them (currently defaults in `+page.svelte`).
+- [ ] **Maps (optional):** If using **`googleMaps`** grounding, follow [Vertex Maps grounding requirements](https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/grounding-with-google-maps) for your GCP project and model; optional `mapsLatLng` on the chat request sets `retrievalConfig.latLng`.
 - [ ] **AI SDK parity:** Use compatible `ai` and `@ai-sdk/*` versions so `UIMessage` parts and `toUIMessageStreamResponse` match.
 - [ ] **Svelte 5:** Page uses runes (`$state`); align Svelte version accordingly.
 
@@ -546,11 +545,9 @@ Paths are relative to the repository root.
 | `PineconeImageQueryService` | [src/lib/agent-tools/pinecone-image-query.ts](src/lib/agent-tools/pinecone-image-query.ts) | `query(query, topK)` — embed, Pinecone `query`, normalize to `PineconeQueryResult`. |
 | `VertexVisionAnswerService` | [src/lib/agent-tools/vertex-vision-answer.ts](src/lib/agent-tools/vertex-vision-answer.ts) | `answer(question, imageUrls, pageContexts)` — fetch images, `generateText`, parse, highlight. |
 | `DocumentRetrievalAndVisionStack` | [src/lib/agent-tools/document-stack.ts](src/lib/agent-tools/document-stack.ts) | Lazy wiring; `queryPinecone`, `answerFromImages`; exposes `topK`, `verboseRetrievalLogging`. |
-| `VercelAiAgentTools` | [src/lib/agent-tools/vercel-ai-agent-tools.ts](src/lib/agent-tools/vercel-ai-agent-tools.ts) | Holds four `tool()` instances bound to the stack and logger. |
-| `ConsoleAgentToolsLogger` | [src/lib/agent-tools/logger.ts](src/lib/agent-tools/logger.ts) | `info` to stderr with optional structured data; no-op `debug` unless overridden. |
-| `RemoteDebugAgentToolsLogger` | [src/lib/agent-tools/logger.ts](src/lib/agent-tools/logger.ts) | Delegates `info` to inner logger; `debug` POSTs JSON to a configured ingest URL. |
+| `ConsoleAgentToolsLogger` | [src/lib/agent-tools/logger.ts](src/lib/agent-tools/logger.ts) | `info` to stderr with optional structured data. |
 
-**Factory:** `createVercelAiAgentTools(config, logger)` — [src/lib/agent-tools/vercel-ai-agent-tools.ts](src/lib/agent-tools/vercel-ai-agent-tools.ts) — constructs stack + tools.
+**Functions:** `createAllAgentTools(ctx)`, `createChatAgentTools(ctx)` — [src/lib/agent-tools/chat-tool-set.ts](src/lib/agent-tools/chat-tool-set.ts) — merge domain tool factories into one catalog / chat subset.
 
 **Function:** `assertAgentToolsConfig(config)` — [src/lib/agent-tools/document-stack.ts](src/lib/agent-tools/document-stack.ts) — validates required fields before service construction.
 
@@ -578,13 +575,12 @@ Paths are relative to the repository root.
 
 | Name | Purpose |
 |------|---------|
-| `AgentToolsLogger` | Interface: `info(message, data?)`, optional `debug(payload)`. |
-| `AgentToolsDebugPayload` | Structured debug event: `runId`, `hypothesisId`, `location`, `message`, `data`. |
+| `AgentToolsLogger` | Interface: `info(message, data?)`. |
 | `ConsoleAgentToolsLoggerOptions` | `{ feedbackEnabled?: boolean }`. |
 
 ### Barrel exports
 
-[src/lib/agent-tools/index.ts](src/lib/agent-tools/index.ts) re-exports types, parsers, embedder, Pinecone service, vision service, stack, `VercelAiAgentTools`, loggers, and `normalizeGoogleVertexLocation`.
+[src/lib/agent-tools/index.ts](src/lib/agent-tools/index.ts) re-exports types, parsers, embedder, Pinecone service, vision service, stack, tool composition helpers (`createAllAgentTools`, `createChatAgentTools`), `AgentToolContext`, loggers, and `normalizeGoogleVertexLocation`.
 
 ---
 

@@ -4,8 +4,11 @@
  */
 import { env } from '$env/dynamic/private';
 import {
-	createVercelAiAgentTools,
+	createAllAgentTools,
+	createChatAgentTools,
 	ConsoleAgentToolsLogger,
+	DocumentRetrievalAndVisionStack,
+	GoogleCredentialsEnvNormalizer,
 	normalizeGoogleVertexLocation
 } from './agent-tools/index.js';
 import type { AgentToolsConfig } from './agent-tools/types.js';
@@ -21,9 +24,12 @@ function buildConfig(): AgentToolsConfig {
 
 	return {
 		pineconeApiKey: env.PINECONE_API_KEY?.trim() ?? '',
-		googleProjectId: env.GOOGLE_PROJECT_ID?.trim() ?? '',
+		googleProjectId:
+			env.GOOGLE_PROJECT_ID?.trim() || env.GOOGLE_VERTEX_PROJECT?.trim() || '',
 		googleLocation: normalizeGoogleVertexLocation(
-			env.GOOGLE_LOCATION?.trim() || env.GOOGLE_LOCATION_REGION?.trim()
+			env.GOOGLE_LOCATION?.trim() ||
+				env.GOOGLE_LOCATION_REGION?.trim() ||
+				env.GOOGLE_VERTEX_LOCATION?.trim()
 		),
 		pineconeIndexName:
 			env.PINECONE_INDEX_NAME?.trim() || env.PINECONE_INDEX?.trim() || DEFAULT_PINECONE_INDEX,
@@ -39,12 +45,23 @@ function buildConfig(): AgentToolsConfig {
 
 const config = buildConfig();
 
+new GoogleCredentialsEnvNormalizer().resolve(
+	config.credentialsResolveCwd ?? process.cwd(),
+	config.googleApplicationCredentials
+);
+
 const feedbackEnabled = config.feedbackEnabled !== false;
 const logger = new ConsoleAgentToolsLogger({ feedbackEnabled });
 
-const vercelTools = createVercelAiAgentTools(config, logger);
+const stack = new DocumentRetrievalAndVisionStack(config, logger);
+const context = {
+	stack,
+	logger
+};
+const allTools = createAllAgentTools(context);
 
-export const pineconeQueryTool = vercelTools.pineconeQueryTool;
-export const answerFromImagesTool = vercelTools.answerFromImagesTool;
-export const calculatorTool = vercelTools.calculatorTool;
-export const unitConverterTool = vercelTools.unitConverterTool;
+export const pineconeQueryTool = allTools.pineconeQuery;
+export const answerFromImagesTool = allTools.answerFromImages;
+export const calculatorTool = allTools.calculator;
+export const unitConverterTool = allTools.unitConverter;
+export const chatTools = createChatAgentTools(context);

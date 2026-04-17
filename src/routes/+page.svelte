@@ -29,13 +29,18 @@
 
 	// Local state for the text input
 	let inputValue = $state('');
+	/** When true, POST body includes `useMapsForMessage` so the server uses only Vertex `googleMaps` (no mixed tools). */
+	let useMapsForThisMessage = $state(false);
 
 	function handleSubmit(e: Event) {
 		e.preventDefault();
 		const text = inputValue.trim();
 		if (!text) return;
 
-		chat.sendMessage({ text });
+		chat.sendMessage(
+			{ text },
+			{ body: { useMapsForMessage: useMapsForThisMessage } }
+		);
 		inputValue = '';
 	}
 
@@ -573,15 +578,25 @@
 
 	<!-- Input form -->
 	<form onsubmit={handleSubmit}>
-		<input
-			type="text"
-			bind:value={inputValue}
-			placeholder="Ask about weather, math, or unit conversions…"
-			disabled={chat.status === 'streaming'}
-		/>
-		<button type="submit" disabled={chat.status === 'streaming'}>
-			Send
-		</button>
+		<div class="composer-row">
+			<input
+				type="text"
+				bind:value={inputValue}
+				placeholder="Ask about weather, math, or unit conversions…"
+				disabled={chat.status === 'streaming'}
+			/>
+			<button type="submit" disabled={chat.status === 'streaming'}>
+				Send
+			</button>
+		</div>
+		<label class="maps-flag">
+			<input
+				type="checkbox"
+				bind:checked={useMapsForThisMessage}
+				disabled={chat.status === 'streaming'}
+			/>
+			Use Google Maps grounding for this message
+		</label>
 	</form>
 </main>
 
@@ -1222,13 +1237,38 @@
 	/* Input form — in document flow below the scrollable thread (no overlap) */
 	form {
 		display: flex;
+		flex-direction: column;
 		gap: 0.5rem;
 		flex-shrink: 0;
 		background: var(--bg);
 		padding-top: 0.5rem;
 		padding-bottom: max(0.25rem, env(safe-area-inset-bottom, 0px));
 	}
-	form input {
+	.composer-row {
+		display: flex;
+		gap: 0.5rem;
+		align-items: center;
+	}
+	.maps-flag {
+		display: flex;
+		align-items: center;
+		gap: 0.45rem;
+		font-size: 0.82rem;
+		color: var(--text-muted);
+		cursor: pointer;
+		user-select: none;
+	}
+	.maps-flag input {
+		width: 1rem;
+		height: 1rem;
+		accent-color: var(--btn-primary-bg);
+		cursor: pointer;
+	}
+	.maps-flag:has(input:disabled) {
+		opacity: 0.6;
+		cursor: default;
+	}
+	form .composer-row input[type='text'] {
 		flex: 1;
 		padding: 0.65rem 0.75rem;
 		border: 1px solid var(--border);
@@ -1239,7 +1279,7 @@
 		background: var(--input-bg);
 		color: var(--text);
 	}
-	form input:focus {
+	form .composer-row input[type='text']:focus {
 		border-color: var(--border-hover);
 	}
 	form button {
