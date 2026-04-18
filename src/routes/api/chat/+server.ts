@@ -79,14 +79,6 @@ export const POST: RequestHandler = async ({ request }) => {
 		ignoreIncompleteToolCalls: true
 	});
 
-
-	console.log("--------------------------------");
-	console.log('modelMessages', modelMessages);
-	console.log('useMapsForMessage', useMapsForMessage);
-	console.log('mapsLatLng', mapsLatLng);
-	console.log('abortController.signal', abortController.signal);
-	console.log("--------------------------------");
-
 	const result = await documentToolLoopAgent.stream({
 		prompt: modelMessages,
 		options: { useMapsForMessage, mapsLatLng },

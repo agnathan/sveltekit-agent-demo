@@ -17,7 +17,7 @@ export function createChatAgentTools(ctx: AgentToolContext): ToolSet {
 	const allTools = createAllAgentTools(ctx);
 
 	return {
-		answerFromImages: allTools.answerFromImages,
+		VisualDocumentResearchAgent: allTools.VisualDocumentResearchAgent,
 		calculator: allTools.calculator,
 		unitConverter: allTools.unitConverter
 	} satisfies ToolSet;

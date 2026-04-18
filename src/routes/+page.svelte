@@ -9,10 +9,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { Chat } from '@ai-sdk/svelte';
-	import type { UIMessage } from 'ai';
+	import type { DocumentAgentUIMessage } from '$lib/agent';
 	import { renderMarkdown } from '$lib/renderMarkdown';
 
-	const chat = new Chat<UIMessage>({ messages: [] });
+	const chat = new Chat<DocumentAgentUIMessage>({ messages: [] });
 
 	let theme = $state<'light' | 'dark'>('light');
 
@@ -172,7 +172,8 @@
 		for (const part of parts) {
 			const resultRecord = (() => {
 				if (
-					part.type === 'tool-answerFromImages' &&
+					(part.type === 'tool-VisualDocumentResearchAgent' ||
+						part.type === 'tool-answerFromImages') &&
 					part.state === 'output-available' &&
 					part.output &&
 					typeof part.output === 'object'
@@ -188,7 +189,12 @@
 					typeof part.toolInvocation === 'object'
 				) {
 					const inv = part.toolInvocation as { toolName?: string; result?: unknown };
-					if (inv.toolName !== 'answerFromImages' || !inv.result || typeof inv.result !== 'object')
+					if (
+						inv.toolName !== 'VisualDocumentResearchAgent' &&
+						inv.toolName !== 'answerFromImages'
+					)
+						return null;
+					if (!inv.result || typeof inv.result !== 'object')
 						return null;
 					const out = inv.result as Record<string, unknown>;
 					if (typeof out.error === 'string' && out.error) return null;
@@ -286,6 +292,51 @@
 		}
 
 		return null;
+	}
+
+	/** User-facing label for tool ids (UIMessage `tool-*` names). */
+	function toolDisplayName(toolId: string): string {
+		switch (toolId) {
+			case 'VisualDocumentResearchAgent':
+			case 'answerFromImages':
+				return 'Visual Document Research Agent';
+			default:
+				return toolId;
+		}
+	}
+
+	/** Human-readable preview of partially streamed tool arguments (`input-streaming`). */
+	function partialToolArgsPreview(toolName: string, args: unknown): string {
+		if (args !== null && typeof args === 'object') {
+			const o = args as Record<string, unknown>;
+			if (
+				(toolName === 'VisualDocumentResearchAgent' || toolName === 'answerFromImages') &&
+				typeof o.question === 'string'
+			) {
+				const q = o.question.trim();
+				return q.length > 140 ? `${q.slice(0, 140)}…` : q;
+			}
+			if (toolName === 'calculator') {
+				const expr = o.expression ?? o.expr;
+				if (typeof expr === 'string') return expr;
+			}
+			if (toolName === 'unitConverter') {
+				const bits = [o.value, o.fromUnit, o.toUnit].filter(
+					(x) => typeof x === 'number' || (typeof x === 'string' && x.length > 0)
+				);
+				if (bits.length) return bits.map(String).join(' ');
+			}
+			if (toolName === 'googleMaps') {
+				const q = o.query ?? o.input ?? o.address;
+				if (typeof q === 'string') return q.length > 140 ? `${q.slice(0, 140)}…` : q;
+			}
+		}
+		try {
+			const s = JSON.stringify(args ?? {});
+			return s.length > 160 ? `${s.slice(0, 160)}…` : s;
+		} catch {
+			return '';
+		}
 	}
 
 	function toolResultEmbeddedError(result: unknown): string | null {
@@ -490,6 +541,10 @@
 					</div>
 				{:else if toolUi}
 					{@const embeddedErr = toolResultEmbeddedError(toolUi.result)}
+					{@const streamingPreview =
+						toolUi.isPending && toolUi.state === 'input-streaming'
+							? partialToolArgsPreview(toolUi.name, toolUi.args)
+							: ''}
 					<div
 						class="tool-part"
 						class:tool-part--pending={toolUi.isPending}
@@ -497,23 +552,35 @@
 						class:tool-part--warn={toolUi.isSuccess && !!embeddedErr}
 						class:tool-part--error={toolUi.isError}
 					>
+						{#if streamingPreview}
+							<p class="tool-args-live" aria-live="polite">
+								<span class="tool-args-live-label">Draft args</span>
+								<span class="tool-args-live-text">{streamingPreview}</span>
+							</p>
+						{/if}
 						<div class="tool-status-row">
 							{#if toolUi.isPending}
 								<span class="tool-spinner" aria-hidden="true"></span>
-								<span class="tool-status-label">Running <code>{toolUi.name}</code>…</span>
+								<span class="tool-status-label"
+									>Running <span class="tool-display-name">{toolDisplayName(toolUi.name)}</span>…</span>
 								<span class="badge pending">{toolUi.state}</span>
 							{:else if toolUi.isError}
-								<span class="tool-status-label tool-status-label--error">Tool failed: <code>{toolUi.name}</code></span>
+								<span class="tool-status-label tool-status-label--error"
+									>Tool failed: <span class="tool-display-name">{toolDisplayName(toolUi.name)}</span></span>
 							{:else if embeddedErr}
 								<span class="tool-status-label tool-status-label--warn">Completed with error</span>
 								<span class="badge pending">check result</span>
 							{:else}
-								<span class="tool-status-label tool-status-label--ok"><code>{toolUi.name}</code> finished</span>
+								<span class="tool-status-label tool-status-label--ok"
+									><span class="tool-display-name">{toolDisplayName(toolUi.name)}</span> finished</span>
 								<span class="badge done">done</span>
 							{/if}
 						</div>
 
-						<details class="tool-nested-details">
+						<details
+							class="tool-nested-details"
+							open={toolUi.state === 'input-streaming' || toolUi.state === 'input-available'}
+						>
 							<summary>Arguments</summary>
 							<pre class="tool-json">{JSON.stringify(toolUi.args ?? {}, null, 2)}</pre>
 						</details>
@@ -1028,6 +1095,27 @@
 	}
 
 	/* Tool invocation display */
+	.tool-args-live {
+		margin: 0 0 0.45rem;
+		padding: 0.45rem 0.55rem;
+		border-radius: 6px;
+		background: var(--code-bg);
+		border: 1px dashed var(--border);
+		font-size: 0.8rem;
+		line-height: 1.35;
+	}
+	.tool-args-live-label {
+		display: block;
+		font-size: 0.68rem;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		color: var(--text-muted);
+		margin-bottom: 0.2rem;
+	}
+	.tool-args-live-text {
+		color: var(--text);
+		word-break: break-word;
+	}
 	.tool-part {
 		margin-top: 0.5rem;
 		border-left: 3px solid var(--tool-accent);
@@ -1037,17 +1125,15 @@
 		cursor: pointer;
 		font-size: 0.85rem;
 	}
+	.tool-display-name {
+		font-weight: 600;
+		color: var(--text);
+	}
 	.thinking-summary {
 		color: var(--text-muted);
 	}
 	.thinking-tool-name {
 		opacity: 0.8;
-	}
-	.tool-part code {
-		background: var(--code-bg);
-		padding: 0.1rem 0.3rem;
-		border-radius: 3px;
-		font-size: 0.8rem;
 	}
 	.tool-detail {
 		margin-top: 0.3rem;
@@ -1118,12 +1204,6 @@
 		to {
 			transform: rotate(360deg);
 		}
-	}
-	.tool-status-label code {
-		background: var(--code-bg);
-		padding: 0.08rem 0.28rem;
-		border-radius: 3px;
-		font-size: 0.78rem;
 	}
 	.tool-status-label--ok {
 		color: var(--badge-done-fg);

@@ -1,7 +1,7 @@
 /**
  * Shared chat agent: {@link ToolLoopAgent} (Vercel AI SDK agents) for multi-step tool use.
  *
- * Vertex does not support mixing function tools (`answerFromImages`, etc.) with the
+ * Vertex does not support mixing function tools (`VisualDocumentResearchAgent`, etc.) with the
  * provider-defined `googleMaps` tool in one request. The API passes
  * `options.useMapsForMessage` on each stream call; `prepareCall` registers either
  * chat tools or `googleMaps` only for that turn.
@@ -10,6 +10,7 @@
  * `convertToModelMessages`), matching the previous `agentToolsForHistory` pattern.
  */
 
+import type { SharedV3ProviderOptions } from '@ai-sdk/provider';
 import { ToolLoopAgent, stepCountIs, type InferAgentUIMessage, type ToolSet } from 'ai';
 import { createVertex } from '@ai-sdk/google-vertex';
 import { env } from '$env/dynamic/private';
@@ -18,7 +19,7 @@ import { chatTools } from './tools.js';
 
 function normalizeLocation(raw: string | undefined): string {
 	const loc = (raw || '').trim();
-	if (!loc || loc === 'global') return 'us-central1';
+	if (!loc || loc === 'global') return 'global';
 	return loc;
 }
 
@@ -30,7 +31,8 @@ if (!VERTEX_PROJECT) {
 	);
 }
 
-const MODEL = process.env.AGENT_MODEL?.trim() || 'gemini-2.5-flash';
+const MODEL = process.env.AGENT_MODEL?.trim() || 'gemini-3.1-pro-preview';
+
 const LOCATION = normalizeLocation(
 	env.GOOGLE_LOCATION || env.GOOGLE_VERTEX_LOCATION || env.GOOGLE_LOCATION_REGION
 );
@@ -65,7 +67,7 @@ export const agentToolsForHistory = {
 
 /** Default / document + math + units turn. */
 export const agentSystemChat = `You are a helpful assistant with access to tools.
-For document Q&A, call answerFromImages with the user's question.
+For document Q&A, call VisualDocumentResearchAgent with the user's question.
 Do not call retrieval tools separately for document Q&A.
 You can evaluate math expressions and convert units when needed.
 Always explain tool results in natural language and include a short sources list with page numbers, image URLs, and bounding boxes (if available) when using document tools.
@@ -96,6 +98,30 @@ function mapsRetrievalProviderOptions(
 	};
 }
 
+/**
+ * Gemini (Vertex) provider options: optionally stream tool-call JSON (`partialArgs`) for the UI.
+ * Per `@ai-sdk/google`'s Vertex schema, `streamFunctionCallArguments` is only supported for
+ * Gemini 3+ on Vertex — enabling it on e.g. `gemini-2.5-flash` yields INVALID_ARGUMENT from the API.
+ * Merged with optional Maps retrieval bias on the `vertex` key.
+ * @see https://ai-sdk.dev/providers/ai-sdk-providers/google-vertex
+ */
+function supportsVertexStreamFunctionCallArguments(modelId: string): boolean {
+	return modelId.includes('gemini-3');
+}
+
+function streamTextProviderOptions(mapsLatLng: unknown, modelId: string) {
+	const retrieval = mapsRetrievalProviderOptions(mapsLatLng);
+	if (!supportsVertexStreamFunctionCallArguments(modelId)) {
+		if (!retrieval) return {};
+		return { vertex: retrieval.vertex };
+	}
+	const streamFc = { streamFunctionCallArguments: true as const };
+	return {
+		google: streamFc,
+		vertex: retrieval?.vertex ? { ...retrieval.vertex, ...streamFc } : streamFc
+	};
+}
+
 const documentAgentCallOptionsSchema = z.object({
 	useMapsForMessage: z.boolean().optional(),
 	mapsLatLng: z
@@ -113,10 +139,7 @@ export type DocumentAgentCallOptions = z.infer<typeof documentAgentCallOptionsSc
  * Multi-step agent (tool loop). The API uses `prepareCall` so each turn uses either
  * function tools or `googleMaps`, not both — required by Vertex.
  */
-export const documentToolLoopAgent = new ToolLoopAgent<
-	DocumentAgentCallOptions,
-	typeof agentToolsForHistory
->({
+export const documentToolLoopAgent = new ToolLoopAgent<DocumentAgentCallOptions, ToolSet>({
 	id: 'document-chat',
 	model: agentModel,
 	tools: agentToolsForHistory,
@@ -128,21 +151,20 @@ export const documentToolLoopAgent = new ToolLoopAgent<
 		// spread `opts` so `model`, `prompt`, `stopWhen`, etc. are not dropped.
 		const call = opts.options;
 		const useMaps = call?.useMapsForMessage === true;
-		const providerOptions = mapsRetrievalProviderOptions(call?.mapsLatLng);
-		const withVertex = providerOptions ? { providerOptions } : {};
+		const providerOptions = streamTextProviderOptions(call?.mapsLatLng, MODEL) as SharedV3ProviderOptions;
 		if (useMaps) {
 			return {
 				...opts,
 				tools: { googleMaps },
 				instructions: agentSystemMapsOnly,
-				...withVertex
+				providerOptions
 			};
 		}
 		return {
 			...opts,
 			tools: agentChatTools,
 			instructions: agentSystemChat,
-			...withVertex
+			providerOptions
 		};
 	}
 });

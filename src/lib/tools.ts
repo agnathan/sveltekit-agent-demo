@@ -61,7 +61,7 @@ const context = {
 const allTools = createAllAgentTools(context);
 
 export const pineconeQueryTool = allTools.pineconeQuery;
-export const answerFromImagesTool = allTools.answerFromImages;
+export const visualDocumentResearchAgentTool = allTools.VisualDocumentResearchAgent;
 export const calculatorTool = allTools.calculator;
 export const unitConverterTool = allTools.unitConverter;
 export const chatTools = createChatAgentTools(context);

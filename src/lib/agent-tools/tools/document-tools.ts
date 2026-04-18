@@ -26,7 +26,7 @@ export function createDocumentTools({ stack, logger }: AgentToolContext) {
 		}
 	});
 
-	const answerFromImages = tool({
+	const visualDocumentResearchAgent = tool({
 		description:
 			'Answer a document question by querying Pinecone and then using Google Vertex vision. This keeps large retrieval payloads out of the model loop for faster responses.',
 		inputSchema: z.object({
@@ -35,11 +35,11 @@ export function createDocumentTools({ stack, logger }: AgentToolContext) {
 		execute: async ({ question }) => {
 			const started = Date.now();
 			try {
-				logger.info('Tool start: answerFromImages', {
+				logger.info('Tool start: VisualDocumentResearchAgent', {
 					questionChars: question.length
 				});
 				const result = await stack.answerFromImages(question);
-				logger.info('Tool end: answerFromImages', {
+				logger.info('Tool end: VisualDocumentResearchAgent', {
 					elapsedMs: Date.now() - started,
 					usedImageUrls: result.usedImageUrls.length,
 					answerChars: result.answer.length
@@ -47,7 +47,7 @@ export function createDocumentTools({ stack, logger }: AgentToolContext) {
 				return result;
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
-				logger.info('Tool error: answerFromImages', { message, elapsedMs: Date.now() - started });
+				logger.info('Tool error: VisualDocumentResearchAgent', { message, elapsedMs: Date.now() - started });
 				return {
 					error: message,
 					answer: '',
@@ -67,6 +67,6 @@ export function createDocumentTools({ stack, logger }: AgentToolContext) {
 
 	return {
 		pineconeQuery,
-		answerFromImages
+		VisualDocumentResearchAgent: visualDocumentResearchAgent
 	};
 }
