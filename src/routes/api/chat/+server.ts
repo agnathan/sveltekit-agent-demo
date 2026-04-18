@@ -6,34 +6,16 @@
  * The client sends the conversation as an array of UIMessage objects.
  * Optional JSON fields: `useMapsForMessage` (boolean) selects Vertex `googleMaps`-only
  * tools vs default chat tools; `mapsLatLng` / `retrievalLatLng` set Maps retrieval bias.
- * Uses `streamText` with a multi-step stop condition and returns
- * `toUIMessageStreamResponse` for @ai-sdk/svelte Chat.
+ * Uses {@link ToolLoopAgent} (Vercel AI SDK agents) with `stream` + `toUIMessageStreamResponse`
+ * for @ai-sdk/svelte Chat.
  */
-import { convertToModelMessages, stepCountIs, streamText, type UIMessage } from 'ai';
-import type { RequestHandler } from '@sveltejs/kit';
 import {
-	agentChatTools,
-	agentMapsTools,
-	agentModel,
-	agentSystemChat,
-	agentSystemMapsOnly,
-	agentToolsForHistory
-} from '$lib/agent';
-
-function mapsRetrievalProviderOptions(raw: unknown):
-	| { vertex: { retrievalConfig: { latLng: { latitude: number; longitude: number } } } }
-	| undefined {
-	if (!raw || typeof raw !== 'object') return undefined;
-	const o = raw as Record<string, unknown>;
-	if (typeof o.latitude !== 'number' || typeof o.longitude !== 'number') return undefined;
-	return {
-		vertex: {
-			retrievalConfig: {
-				latLng: { latitude: o.latitude, longitude: o.longitude }
-			}
-		}
-	};
-}
+	convertToModelMessages,
+	validateUIMessages,
+	type UIMessage
+} from 'ai';
+import type { RequestHandler } from '@sveltejs/kit';
+import { agentToolsForHistory, documentToolLoopAgent } from '$lib/agent';
 
 function readUseMapsForMessage(raw: unknown): boolean {
 	if (raw === true) return true;
@@ -41,19 +23,26 @@ function readUseMapsForMessage(raw: unknown): boolean {
 	return false;
 }
 
+function readMapsLatLng(
+	raw: unknown
+): { latitude: number; longitude: number } | undefined {
+	if (!raw || typeof raw !== 'object') return undefined;
+	const o = raw as Record<string, unknown>;
+	if (typeof o.latitude !== 'number' || typeof o.longitude !== 'number') return undefined;
+	return { latitude: o.latitude, longitude: o.longitude };
+}
+
 export const POST: RequestHandler = async ({ request }) => {
 	let messages: UIMessage[] = [];
 	let useMapsForMessage = false;
-	let providerOptions:
-		| { vertex: { retrievalConfig: { latLng: { latitude: number; longitude: number } } } }
-		| undefined;
+	let mapsLatLng: { latitude: number; longitude: number } | undefined;
 	try {
 		const body: unknown = await request.json();
 		if (body && typeof body === 'object') {
 			const b = body as Record<string, unknown>;
 			messages = Array.isArray(b.messages) ? (b.messages as UIMessage[]) : [];
 			useMapsForMessage = readUseMapsForMessage(b.useMapsForMessage);
-			providerOptions = mapsRetrievalProviderOptions(b.mapsLatLng ?? b.retrievalLatLng);
+			mapsLatLng = readMapsLatLng(b.mapsLatLng ?? b.retrievalLatLng);
 		}
 	} catch {
 		return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
@@ -67,21 +56,40 @@ export const POST: RequestHandler = async ({ request }) => {
 		abortController.abort();
 	});
 
-	const modelMessages = await convertToModelMessages(messages, {
-		tools: agentToolsForHistory,
+	let validatedMessages: UIMessage[];
+	try {
+		validatedMessages = await validateUIMessages({
+			messages,
+			// Vertex provider tools use input type `{}`; AI SDK validators expect wider `Tool` types.
+			tools: agentToolsForHistory as unknown as Parameters<
+				typeof validateUIMessages
+			>[0]['tools']
+		});
+	} catch {
+		return new Response(JSON.stringify({ error: 'Invalid messages' }), {
+			status: 400,
+			headers: { 'Content-Type': 'application/json' }
+		});
+	}
+
+	const modelMessages = await convertToModelMessages(validatedMessages, {
+		tools: agentToolsForHistory as unknown as NonNullable<
+			Parameters<typeof convertToModelMessages>[1]
+		>['tools'],
 		ignoreIncompleteToolCalls: true
 	});
 
-	const streamTools = useMapsForMessage ? agentMapsTools : agentChatTools;
-	const system = useMapsForMessage ? agentSystemMapsOnly : agentSystemChat;
 
-	const result = streamText({
-		model: agentModel,
-		system,
-		messages: modelMessages,
-		tools: streamTools,
-		...(providerOptions ? { providerOptions } : {}),
-		stopWhen: stepCountIs(8),
+	console.log("--------------------------------");
+	console.log('modelMessages', modelMessages);
+	console.log('useMapsForMessage', useMapsForMessage);
+	console.log('mapsLatLng', mapsLatLng);
+	console.log('abortController.signal', abortController.signal);
+	console.log("--------------------------------");
+
+	const result = await documentToolLoopAgent.stream({
+		prompt: modelMessages,
+		options: { useMapsForMessage, mapsLatLng },
 		abortSignal: abortController.signal
 	});
 

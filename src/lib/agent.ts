@@ -1,16 +1,19 @@
 /**
- * Shared chat agent configuration for `streamText` in the API route.
+ * Shared chat agent: {@link ToolLoopAgent} (Vercel AI SDK agents) for multi-step tool use.
  *
- * Exports model, system prompts, and tool sets — no ToolLoopAgent wrapper.
+ * Vertex does not support mixing function tools (`answerFromImages`, etc.) with the
+ * provider-defined `googleMaps` tool in one request. The API passes
+ * `options.useMapsForMessage` on each stream call; `prepareCall` registers either
+ * chat tools or `googleMaps` only for that turn.
  *
- * Vertex does not support mixing function tools (`answerFromImages`, etc.) with
- * the provider-defined `googleMaps` tool in one request. The client sends
- * `useMapsForMessage` so each turn uses either `chatTools` or `{ googleMaps }`.
+ * `documentToolLoopAgent.tools` is the union of both (for UI message validation and
+ * `convertToModelMessages`), matching the previous `agentToolsForHistory` pattern.
  */
 
-import type { ToolSet } from 'ai';
+import { ToolLoopAgent, stepCountIs, type InferAgentUIMessage, type ToolSet } from 'ai';
 import { createVertex } from '@ai-sdk/google-vertex';
 import { env } from '$env/dynamic/private';
+import { z } from 'zod';
 import { chatTools } from './tools.js';
 
 function normalizeLocation(raw: string | undefined): string {
@@ -29,9 +32,7 @@ if (!VERTEX_PROJECT) {
 
 const MODEL = process.env.AGENT_MODEL?.trim() || 'gemini-2.5-flash';
 const LOCATION = normalizeLocation(
-	env.GOOGLE_LOCATION ||
-		env.GOOGLE_VERTEX_LOCATION ||
-		env.GOOGLE_LOCATION_REGION
+	env.GOOGLE_LOCATION || env.GOOGLE_VERTEX_LOCATION || env.GOOGLE_LOCATION_REGION
 );
 
 const vertex = createVertex({
@@ -51,12 +52,11 @@ const googleMaps = vertex.tools.googleMaps({});
 /** Function tools only (document Q&A, calculator, units). */
 export const agentChatTools = chatTools satisfies ToolSet;
 
-/** Provider tool only — must not be combined with `agentChatTools` in one `streamText`. */
+/** Provider tool only — must not be combined with `agentChatTools` in one model call. */
 export const agentMapsTools = { googleMaps } satisfies ToolSet;
 
 /**
- * Union of all tools that may appear in chat history, for `convertToModelMessages` only.
- * Not passed to `streamText` (that would re-trigger the Vertex mixed-tools limitation).
+ * Union of all tools that may appear in chat history (validation + `convertToModelMessages`).
  */
 export const agentToolsForHistory = {
 	...chatTools,
@@ -78,3 +78,73 @@ You cannot search documents or PDFs in this mode. If the user asks about uploade
 Always summarize grounded results and cite place titles and Maps links when present.
 
 Before you use a tool or give your final answer, think step-by-step inside <thinking>...</thinking> tags so the user can follow your reasoning. Keep thinking concise.`;
+
+function mapsRetrievalProviderOptions(
+	raw: unknown
+):
+	| { vertex: { retrievalConfig: { latLng: { latitude: number; longitude: number } } } }
+	| undefined {
+	if (!raw || typeof raw !== 'object') return undefined;
+	const o = raw as Record<string, unknown>;
+	if (typeof o.latitude !== 'number' || typeof o.longitude !== 'number') return undefined;
+	return {
+		vertex: {
+			retrievalConfig: {
+				latLng: { latitude: o.latitude, longitude: o.longitude }
+			}
+		}
+	};
+}
+
+const documentAgentCallOptionsSchema = z.object({
+	useMapsForMessage: z.boolean().optional(),
+	mapsLatLng: z
+		.object({
+			latitude: z.number(),
+			longitude: z.number()
+		})
+		.optional()
+});
+
+/** Per-request options for {@link documentToolLoopAgent} (maps mode + optional Vertex retrieval bias). */
+export type DocumentAgentCallOptions = z.infer<typeof documentAgentCallOptionsSchema>;
+
+/**
+ * Multi-step agent (tool loop). The API uses `prepareCall` so each turn uses either
+ * function tools or `googleMaps`, not both — required by Vertex.
+ */
+export const documentToolLoopAgent = new ToolLoopAgent<
+	DocumentAgentCallOptions,
+	typeof agentToolsForHistory
+>({
+	id: 'document-chat',
+	model: agentModel,
+	tools: agentToolsForHistory,
+	instructions: agentSystemChat,
+	stopWhen: stepCountIs(10),
+	callOptionsSchema: documentAgentCallOptionsSchema,
+	prepareCall: (opts) => {
+		// ToolLoopAgent replaces the full merged call args with this return value — must
+		// spread `opts` so `model`, `prompt`, `stopWhen`, etc. are not dropped.
+		const call = opts.options;
+		const useMaps = call?.useMapsForMessage === true;
+		const providerOptions = mapsRetrievalProviderOptions(call?.mapsLatLng);
+		const withVertex = providerOptions ? { providerOptions } : {};
+		if (useMaps) {
+			return {
+				...opts,
+				tools: { googleMaps },
+				instructions: agentSystemMapsOnly,
+				...withVertex
+			};
+		}
+		return {
+			...opts,
+			tools: agentChatTools,
+			instructions: agentSystemChat,
+			...withVertex
+		};
+	}
+});
+
+export type DocumentAgentUIMessage = InferAgentUIMessage<typeof documentToolLoopAgent>;
